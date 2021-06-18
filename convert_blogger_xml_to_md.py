@@ -16,6 +16,8 @@ class HTMLToMarkdownParser(HTMLParser):
 		# stacks to keep track of embedded elements
 		self.links = [] 
 		self.list = [] # saves either last list number or unordered
+		self.spans = [] # tracks spans
+		self.escape_md_data = True # used to temporarily disable escaping (for code)
 
 	def ensure_on_newline(self):
 		"""
@@ -68,6 +70,30 @@ class HTMLToMarkdownParser(HTMLParser):
 			else:
 				self.links[-1] += 1
 				self.md += str(self.links[-1]) + ". "
+		elif tag == "span":
+			"""
+				taking care of setting font type as 'Courier' in Blogger.
+				Usually this was to identify a techincal word/function.
+				The md alternative is using backticks. Ie:
+				
+				<span style="font-family: courier;">malloc(0x10)</span>
+				will be converted to
+				`malloc(0x10)`
+
+			"""
+			if attr_dir["style"] == "font-family: courier;":
+				self.md += "`"
+				self.spans.append("backtick_span")
+			else:
+				self.spans.append("ignored_span")
+		elif tag == "code":
+			self.ensure_on_newline()
+			self.md += "```\n"
+			self.escape_md_data = False
+		elif tag == "br":
+			# only put newline if in <code> section
+			if not self.escape_md_data:
+				self.ensure_on_newline()
 		else:
 			print(f"doing nothing for {tag}")
 
@@ -76,7 +102,7 @@ class HTMLToMarkdownParser(HTMLParser):
 		print("End tag  :", tag)
 
 		if tag == "p":
-			self.md += "\n"			
+			self.md += "\n"
 		elif tag == "i":
 			self.md += "*"
 		elif tag == "a":
@@ -92,13 +118,30 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag in ["ol", "ul"]:
 			self.links.pop()
 			self.md += "\n"
+		if tag == "li":
+			self.md += "\n"	
+		elif tag == "span":
+			last_span = self.spans.pop()
+			if last_span == "backtick_span":
+				self.md += "`"
+			else:
+				pass # ignoring this span
+		elif tag == "code":
+			self.ensure_on_newline()
+			self.md += "```\n"
+			self.escape_md_data = True
+		elif tag == "br":
+			pass				
 		else:
-			print(f"doing nothing for {tag}")
+			print(f"doing nothing after {tag}")
 
 	def handle_data(self, data):
 		print("Data     :", data)
 
-		self.md += escape_md(data)
+		if self.escape_md_data:
+			self.md += escape_md(data)
+		else:
+			self.md += data
 
 	def handle_comment(self, data):
 		print("Comment  :", data)
@@ -185,6 +228,4 @@ def main():
 	convert_posts_to_md(in_blogger_xml)
 
 if __name__ == '__main__':
-	# for local testing
-	sys.argv = ["convert_blogger_xml_to_md.py", "blog-06-17-2021.xml"]
 	main()
