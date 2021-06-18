@@ -13,7 +13,9 @@ class HTMLToMarkdownParser(HTMLParser):
 	def __init__(self):
 		HTMLParser.__init__(self)
 		self.md = ""
-		self.links = [] # need stack to keep track of links
+		# stacks to keep track of embedded elements
+		self.links = [] 
+		self.list = [] # saves either last list number or unordered
 
 	def ensure_on_newline(self):
 		"""
@@ -55,6 +57,17 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag == "h3":
 			self.ensure_on_newline()
 			self.md += "### "
+		elif tag == "ol":
+			self.links.append(0)
+		elif tag == "ul":
+			self.links.append("unordered")
+		elif tag == "li":
+			self.ensure_on_newline()
+			if self.links[-1] == "unordered":
+				self.md += "* " 
+			else:
+				self.links[-1] += 1
+				self.md += str(self.links[-1]) + ". "
 		else:
 			print(f"doing nothing for {tag}")
 
@@ -76,7 +89,9 @@ class HTMLToMarkdownParser(HTMLParser):
 			pass # do nothing
 		elif tag in ["h1", "h2", "h3"]:
 			self.md += "\n"
-
+		elif tag in ["ol", "ul"]:
+			self.links.pop()
+			self.md += "\n"
 		else:
 			print(f"doing nothing for {tag}")
 
@@ -105,7 +120,7 @@ class HTMLToMarkdownParser(HTMLParser):
 def escape_md(s):
 	return s.replace("#", "\\#").replace("_", "\\_").replace("{", "\\{").replace("}", "\\}")\
 			.replace("[", "\\[").replace("]", "\\]").replace("-", "\\-").replace("!", "\\!")\
-			.replace("(", "\\(").replace(")", "\\)").replace("+", "\\+")
+			.replace("(", "\\(").replace(")", "\\)").replace("+", "\\+").replace("*", "\\*")
 
 def convert_html_to_md(html):
 	"""
