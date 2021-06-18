@@ -118,7 +118,7 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag in ["ol", "ul"]:
 			self.links.pop()
 			self.md += "\n"
-		if tag == "li":
+		elif tag == "li":
 			self.md += "\n"	
 		elif tag == "span":
 			last_span = self.spans.pop()
