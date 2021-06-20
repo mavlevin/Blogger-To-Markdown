@@ -62,7 +62,7 @@ class CustomFormatter(logging.Formatter):
 
 formatter = CustomFormatter()
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(logging.DEBUG)
 ch.setFormatter(formatter)
 
 
@@ -120,6 +120,10 @@ class HTMLToMarkdownParser(HTMLParser):
 			self.md += "**"
 		elif tag == "strike":
 			self.md += "~~"
+		elif tag == "hr":
+			self.ensure_on_newline() 
+			self.md += "***"
+			self.ensure_on_newline() 			
 		elif tag in ["u", "sup", "sub", "iframe", "script", "style"]: # passthrough
 			self.md += f"<{tag}>"
 		elif tag == "a":
@@ -220,7 +224,7 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag == "b":
 			self.md += "**"
 		elif tag == "strike":
-			self.md += "~~"		
+			self.md += "~~"
 		elif tag in ["u", "sup", "sub", "iframe", "script", "style"]: # passthrough
 			self.md += f"</{tag}>"
 		elif tag == "a":
@@ -281,7 +285,12 @@ class HTMLToMarkdownParser(HTMLParser):
 			html_logger.warning(f"doing nothing after {tag}")
 
 	def handle_data(self, data):
-		html_logger.debug(f"Data     :{data}")
+		html_logger.debug(f"Data     :{data} (len: {len(data)})")
+
+		if data.replace("\n", "").replace("\r", "").replace(" ", "").replace("\t", "") == "":
+			# only new lines
+			html_logger.debug("only whitespaces. skipping")
+			return
 
 		if self.escape_md_data:
 			self.md += escape_md(data)
@@ -306,8 +315,8 @@ class HTMLToMarkdownParser(HTMLParser):
 		raise NotImplementedError("delete this exception to continue")
 
 	def handle_decl(self, data):
-		print("Decl     :", data)
-		raise NotImplementedError("delete this exception to continue")
+		html_logger.debug(f"Decl     :{data}")
+		html_logger.info(f"ignoring html decl '{data}'")
 
 
 def download_img_src(src_url):
