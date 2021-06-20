@@ -1,13 +1,78 @@
 
-# goal: as little non-default dependencies as possible
+# NOTICE: using NO external libraries! Only std libs that come with python
 
-# standard libraries on all python installs
 import sys
+import os.path
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
-import logging #todo: add more logging
-from html.parser import HTMLParser
 from html.entities import name2codepoint
+import urllib.request
+import urllib.parse
+import logging 
+import datetime
+
+g_converter_config = {}
+
+# where to save converted markdown posts
+g_converter_config["md_file_save_path"] = "converted_posts" 
+
+# where to save downloaded images
+g_converter_config["image_save_path"] = "fetched_images"
+
+# path prefix to use in markdown to access downloaded images
+g_converter_config["img_path_relative_to_md"] = "../fetched_images"
+
+# html to markdown conversion settings
+g_converter_config["images_on_own_line"] = True
+g_converter_config["allow consecutive empty lines"] = False
+g_converter_config["ignore empty head tags"] = True
+g_converter_config["ignore downloaded image cache"] = False
+
+# settings to ease debugging
+# g_converter_config["dont download use demo image"] = "../demo.jpg"
+g_converter_config["stop after one conversion"] = False
+
+HAPPY_LOG = 25
+class CustomFormatter(logging.Formatter):
+    """Logging Formatter to add colors and count warning / errors"""
+
+    grey = "\x1b[38;21m"
+    yellow = "\x1b[33;21m"
+    red = "\x1b[31;21m"
+    bold_red = "\x1b[31;1m"
+    reset = "\x1b[0m"
+    green = "\x1b[1;32m"
+    format_err = "%(asctime)s:%(levelname)s:%(name)s: %(message)s (%(filename)s:%(lineno)d)"
+    format_info = "%(asctime)s:%(levelname)s:%(name)s: %(message)s"
+    format_happy = "%(asctime)s:HAPPY:%(name)s: %(message)s"
+
+    FORMATS = {
+        logging.DEBUG: grey + format_info + reset,
+        logging.INFO: grey + format_info + reset,
+        HAPPY_LOG: green + format_happy + reset,
+        logging.WARNING: yellow + format_err + reset,
+        logging.ERROR: red + format_err + reset,
+        logging.CRITICAL: bold_red + format_err + reset,
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt, datefmt='%I:%M:%S')
+        return formatter.format(record)
+
+formatter = CustomFormatter()
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+ch.setFormatter(formatter)
+
+
+html_logger = logging.getLogger('html parser')
+html_logger.setLevel(logging.DEBUG)
+html_logger.addHandler(ch)
+
+converter_logger = logging.getLogger('converter')
+converter_logger.setLevel(logging.DEBUG)
+converter_logger.addHandler(ch)
 
 class HTMLToMarkdownParser(HTMLParser):
 	def __init__(self):
@@ -18,36 +83,60 @@ class HTMLToMarkdownParser(HTMLParser):
 		self.list = [] # saves either last list number or unordered
 		self.spans = [] # tracks spans
 		self.escape_md_data = True # used to temporarily disable escaping (for code)
+		self.table_state = "waiting" # waiting / new / filling
+		self.table_columns = 0
 
 	def ensure_on_newline(self):
 		"""
 			solves issues that html has block fomating on certain attributes and md doesn't.
 			ie, in html can have inline link then h1: some text <a href="...">read more</a> <h1>hi</h1>
 			html knows to handle that.
-			but in markdown, h1 needs to be on a new line - though can't end every </a> tag with a newline because
-			sometimes want to save display of inline text.
+			but in markdown, h1 needs to be on a new line - though in conversion can't just 
+			end every </a> tag with a newline because sometimes want to save display of inline text.
 
 			this function addresses that issue by making sure h1 and friends are started on a newline
 		"""
-		if self.md[-1] != "\n":
+		if (len(self.md) > 0) and (self.md[-1] != "\n"):
 			self.md += "\n"
+			html_logger.debug("adding newline")
+		else:
+			html_logger.debug("not adding new line")
 
 	def handle_starttag(self, tag, attrs):
-		print("Start tag:", tag)
-		attr_dir = {}
+		html_logger.debug(f"Start tag: {tag}")	
 		for attr in attrs:
-			print("     attr:", attr)
-			attr_dir[attr[0]] = attr[1]
-
+			html_logger.debug(f"     attr:{attr}")
+		
+		attr_dict = dict(attrs)
 		if tag == "p":
-			self.md += "\n"
+			# only drop line if not in table
+			if self.table_state == "waiting":
+				self.md += "\n"
 		elif tag == "i":
 			self.md += "*"
+		elif tag == "blockquote":
+			self.md += "> "	
+		elif tag == "b":
+			self.md += "**"
+		elif tag == "strike":
+			self.md += "~~"
+		elif tag in ["u", "sup", "sub", "iframe", "script", "style"]: # passthrough
+			self.md += f"<{tag}>"
 		elif tag == "a":
-			self.md += "["
-			self.links.append(attr_dir["href"])
+			if ("href" in attr_dict) and (attr_dict["href"] != "https://www.blogger.com/null"):
+				self.md += "["
+				self.links.append(attr_dict["href"])
+			else:
+				self.links.append("unsupported_anchor")
 		elif tag == "img":
-			self.md += "\(will add img support later\)"
+			if g_converter_config["images_on_own_line"]:
+				self.ensure_on_newline()
+			published_img_path = download_img_src(attr_dict["src"])
+			if "alt" in attr_dict:
+				alt_text = attr_dict["alt"]
+			else:
+				alt_text = ""
+			self.md += f"![{alt_text}]({published_img_path})"
 		elif tag == "div":
 			pass # do nothing
 		elif tag == "h1":
@@ -59,6 +148,12 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag == "h3":
 			self.ensure_on_newline()
 			self.md += "### "
+		elif tag == "h4":
+			self.ensure_on_newline()
+			self.md += "#### "
+		elif tag == "h5":
+			self.ensure_on_newline()
+			self.md += "##### "			
 		elif tag == "ol":
 			self.links.append(0)
 		elif tag == "ul":
@@ -81,7 +176,7 @@ class HTMLToMarkdownParser(HTMLParser):
 				`malloc(0x10)`
 
 			"""
-			if attr_dir["style"] == "font-family: courier;":
+			if "style" in attr_dict.keys() and attr_dict["style"] == "font-family: courier;":
 				self.md += "`"
 				self.spans.append("backtick_span")
 			else:
@@ -91,30 +186,62 @@ class HTMLToMarkdownParser(HTMLParser):
 			self.md += "```\n"
 			self.escape_md_data = False
 		elif tag == "br":
-			# only put newline if in <code> section
-			if not self.escape_md_data:
+			if g_converter_config["allow consecutive empty lines"]:
+				self.md += "\n"
+			else:
 				self.ensure_on_newline()
-		else:
-			print(f"doing nothing for {tag}")
 
+		elif tag == "table":
+			if self.table_state != "waiting":
+				raise NotImplementedError("Currently don't support nested tables :(")
+			self.table_state = "new"
+		elif tag == "tbody":
+			pass # don't care
+		elif tag == "tr":
+			self.ensure_on_newline()
+			self.md += "| "
+		elif tag == "td" or tag == "th":
+			pass
+		else:
+			html_logger.warning(f"doing nothing for {tag}")
 
 	def handle_endtag(self, tag):
-		print("End tag  :", tag)
+		html_logger.debug(f"End tag  {tag}")
 
 		if tag == "p":
-			self.md += "\n"
+			# only drop line if not in table
+			if self.table_state == "waiting":
+				# might have had something like </code> that already dropped us a line
+				self.ensure_on_newline() 
 		elif tag == "i":
 			self.md += "*"
+		elif tag == "blockquote":
+			self.md += "\n"			
+		elif tag == "b":
+			self.md += "**"
+		elif tag == "strike":
+			self.md += "~~"		
+		elif tag in ["u", "sup", "sub", "iframe", "script", "style"]: # passthrough
+			self.md += f"</{tag}>"
 		elif tag == "a":
-			self.md += "]"
 			last_link = self.links.pop()
-			self.md += f"({last_link})"
+			if last_link != "unsupported_anchor":
+				self.md += "]"
+				self.md += f"({last_link})"
+			else:
+				pass # do nothing
 		elif tag == "div":
 			pass # do nothing
 		elif tag == "img":
 			pass # do nothing
-		elif tag in ["h1", "h2", "h3"]:
-			self.md += "\n"
+		elif tag in ["h1", "h2", "h3", "h4", "h5"]:
+			if g_converter_config["ignore empty head tags"]:
+				last_line = self.md[self.md.rfind("\n"):]
+				if last_line.replace("#", "").replace(" ", "") != "":
+					# has text
+					self.md += "\n"
+			else:
+				self.md += "\n"
 		elif tag in ["ol", "ul"]:
 			self.links.pop()
 			self.md += "\n"
@@ -132,11 +259,29 @@ class HTMLToMarkdownParser(HTMLParser):
 			self.escape_md_data = True
 		elif tag == "br":
 			pass				
+
+		elif tag == "table":
+			if self.table_state != "filling":
+				raise Exception("bug in table parsing")
+			self.table_state = "waiting"
+			self.table_columns = 0
+		elif tag == "tbody":
+			pass # don't care
+		elif tag == "td" or tag == "th":
+			if self.table_state == "new":
+				self.table_columns += 1
+			self.md += " |"
+		elif tag == "tr":
+			if self.table_state == "new":
+				self.md += "\n" + "---".join(["|"]*(self.table_columns+1))
+				self.table_state = "filling"
+			else:
+				self.ensure_on_newline()
 		else:
-			print(f"doing nothing after {tag}")
+			html_logger.warning(f"doing nothing after {tag}")
 
 	def handle_data(self, data):
-		print("Data     :", data)
+		html_logger.debug(f"Data     :{data}")
 
 		if self.escape_md_data:
 			self.md += escape_md(data)
@@ -144,11 +289,13 @@ class HTMLToMarkdownParser(HTMLParser):
 			self.md += data
 
 	def handle_comment(self, data):
-		print("Comment  :", data)
+		html_logger.debug(f"Comment  :{data}")
+		html_logger.info(f"ignoring html comment '{data}'")
 
 	def handle_entityref(self, name):
 		c = chr(name2codepoint[name])
 		print("Named ent:", c)
+		raise NotImplementedError("delete this exception to continue")
 
 	def handle_charref(self, name):
 		if name.startswith('x'):
@@ -156,59 +303,107 @@ class HTMLToMarkdownParser(HTMLParser):
 		else:
 			c = chr(int(name))
 		print("Num ent  :", c)
+		raise NotImplementedError("delete this exception to continue")
 
 	def handle_decl(self, data):
 		print("Decl     :", data)
+		raise NotImplementedError("delete this exception to continue")
+
+
+def download_img_src(src_url):
+	if "dont download use demo image" in g_converter_config:
+		return g_converter_config["dont download use demo image"]
+	img_name = urllib.parse.unquote(src_url[src_url.rfind("/")+1:])
+	converter_logger.debug('img_name:', img_name)
+	save_name = os.path.join(g_converter_config["image_save_path"], img_name)
+	converter_logger.debug("saving @", save_name)
+
+	if g_converter_config["ignore downloaded image cache"] or not os.path.isfile(save_name):
+		converter_logger.info(f"downloading '{src_url}'")
+		urllib.request.urlretrieve(src_url, save_name)  # using this instead of requests because it's preinstalled
+	else:
+		converter_logger.info("found image already downloaded")
+	
+	return os.path.join(g_converter_config["img_path_relative_to_md"], img_name)
+
 
 def escape_md(s):
 	return s.replace("#", "\\#").replace("_", "\\_").replace("{", "\\{").replace("}", "\\}")\
 			.replace("[", "\\[").replace("]", "\\]").replace("-", "\\-").replace("!", "\\!")\
 			.replace("(", "\\(").replace(")", "\\)").replace("+", "\\+").replace("*", "\\*")
 
+
 def convert_html_to_md(html):
-	"""
-		where the heavy lifting happens
-	"""
-	print("-"*100)
-	
 	parser = HTMLToMarkdownParser()
 	parser.feed(html)
-	print("-"*100)
-	open("out.md", "w").write(parser.md)
+	return parser.md
 
 
 def convert_post_to_md(post_xml):
 	post_data = {}
-	post_data["published"] = post_xml.find("{http://www.w3.org/2005/Atom}published").text
-	post_data["categories"] = [c.attrib["term"] for c in post_xml.findall("{http://www.w3.org/2005/Atom}category") \
-									if "http://schemas.google.com/blogger/2008/kind#post" != c.attrib["term"]] # todo: maybe clean
-	post_data["title"] = post_xml.find("{http://www.w3.org/2005/Atom}title").text
+	post_data["blogger_id"] = post_xml.find("{http://www.w3.org/2005/Atom}id").text
 	post_data["author"] = post_xml.find("{http://www.w3.org/2005/Atom}author").find("{http://www.w3.org/2005/Atom}name").text
+	post_data["published"] = datetime.datetime.strptime(post_xml.find("{http://www.w3.org/2005/Atom}published").text,'%Y-%m-%dT%H:%M:%S.%f%z')
+	post_data["title"] = post_xml.find("{http://www.w3.org/2005/Atom}title").text
+	post_data["categories"] = [c.attrib["term"] for c in post_xml.findall("{http://www.w3.org/2005/Atom}category") \
+									if "http://schemas.google.com/blogger/2008/kind#post" != c.attrib["term"]]
 
+	# Ensure have everything. Otherweise can't proceeed because will error later
+	for k,v in post_data.items():
+		if v == None:
+			converter_logger.error(f"skipping post '{post_data['title'] or post_data['blogger_id']}' because don't have post's '{k}' element")
+			return
+
+	converter_logger.info(f"converting '{post_data['title']}'")
 	post_data["md"] = convert_html_to_md(post_xml.find("{http://www.w3.org/2005/Atom}content").text)
-	#todo: support extracting comments
 
-	print(f"post_data: {post_data}")
+	md_file_name = f"{post_data['published'].strftime('%Y-%m-%d')}-{urllib.parse.quote('-'.join(post_data['title'].split(' ')), safe='')}.md"
+
+	save_path = os.path.join(g_converter_config["md_file_save_path"], md_file_name)
+
+	converter_logger.log(HAPPY_LOG,f"saving '...{md_file_name}'")
+	open(save_path, "w", encoding="utf-8").write(post_data["md"])
+	
+
+def extract_entry_kind(e):
+	cs = e.findall("{http://www.w3.org/2005/Atom}category")
+	for c in cs:
+		if c.attrib["scheme"] == "http://schemas.google.com/g/2005#kind":
+			return c.attrib["term"].split("#")[-1]
+
+	raise KeyError("Couldn't find the entry type (blogger setting/blogger comment/blogger post)")
+
+
+def ensure_have_folder(f):
+	if not os.path.isdir(f):
+		converter_logger.info(f"creating folder '{f}'")
+		os.mkdir(f)
+
 
 def convert_posts_to_md(xml_path):
-	tree = ET.parse(xml_path)
-	root = tree.getroot()
+	ensure_have_folder(g_converter_config["md_file_save_path"])
+	ensure_have_folder(g_converter_config["image_save_path"])
+
+	root = ET.parse(xml_path).getroot()
 	# root is currently point at the 'feed' elemtn
 
-	# minor sanity checks
 	xml_gen = root.find('{http://www.w3.org/2005/Atom}generator')
 	if xml_gen.text != "Blogger":
-		logging.warning(f"Expected 'Blogger' XML generator. Found generator {xml_gen.text}")
+		converter_logger.warning(f"Expected 'Blogger' XML generator. Found generator {xml_gen.text}")
 
 	if xml_gen.attrib["version"] != "7.00":
-		logging.warning(f"Only tested on Blogger XML generator version 7.00. Found version: {xml_gen.attrib['version']}")
+		converter_logger.warning(f"Only tested on Blogger XML generator version 7.00. Found version: {xml_gen.attrib['version']}")
 
 	for entry in root.findall("{http://www.w3.org/2005/Atom}entry"):
-		if ".post-" in (entry.find("{http://www.w3.org/2005/Atom}id").text):
-			convert_post_to_md(entry)
-			break # only do one for now :)
-
-		# todo might want to support converting pages too
+		if "post" == extract_entry_kind(entry):
+			try:
+				convert_post_to_md(entry)
+			except NotImplementedError as e:
+				converter_logger.error(f"skipping '{entry.find('{http://www.w3.org/2005/Atom}title').text or entry.find('{http://www.w3.org/2005/Atom}id').text}' because exception '{str(e)}'")
+			
+			if g_converter_config["stop after one conversion"]:
+				converter_logger.info("stopping after one conversion")
+				return
 
 
 def main():
@@ -219,13 +414,11 @@ def main():
 			  " and provide the path to the generated XML")
 		return 1
 
-	in_blogger_xml = sys.argv[1]
-	out_md = "out.md"
+	convert_posts_to_md(sys.argv[1])
+	converter_logger.log(HAPPY_LOG, "Done converting Blogger posts to Markdown.")
+	converter_logger.log(HAPPY_LOG, "Take care, polar bear")
+	return 0
 
-	print(f"in : {in_blogger_xml}")
-	print(f"out: {out_md}")
-
-	convert_posts_to_md(in_blogger_xml)
 
 if __name__ == '__main__':
 	main()
