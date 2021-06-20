@@ -303,20 +303,20 @@ class HTMLToMarkdownParser(HTMLParser):
 
 	def handle_entityref(self, name):
 		c = chr(name2codepoint[name])
-		print("Named ent:", c)
-		raise NotImplementedError("delete this exception to continue")
+		html_logger.debug(f"Named ent:{c}")
+		html_logger.warning(f"entity ref handeling unsupported. Ignoring ent: {c}")
 
 	def handle_charref(self, name):
 		if name.startswith('x'):
 			c = chr(int(name[1:], 16))
 		else:
 			c = chr(int(name))
-		print("Num ent  :", c)
-		raise NotImplementedError("delete this exception to continue")
+		html_logger.debug(f"Num ent  :{c}")
+		html_logger.warning(f"char ref handeling unsupported. Ignoring ent: {c}")
 
 	def handle_decl(self, data):
 		html_logger.debug(f"Decl     :{data}")
-		html_logger.info(f"ignoring html decl '{data}'")
+		html_logger.info(f"ignoring decl '{data}'")
 
 
 def download_img_src(src_url):
