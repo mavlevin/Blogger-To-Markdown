@@ -331,7 +331,7 @@ def download_img_src(src_url):
 		converter_logger.info(f"downloading '{src_url}'")
 		urllib.request.urlretrieve(src_url, save_name)  # using this instead of requests because it's preinstalled
 	else:
-		converter_logger.info("found image already downloaded")
+		converter_logger.info("found image in cache")
 	
 	return os.path.join(g_converter_config["img_path_relative_to_md"], img_name)
 
@@ -424,8 +424,11 @@ def main():
 		return 1
 
 	convert_posts_to_md(sys.argv[1])
+	converter_logger.log(HAPPY_LOG, "")
+	converter_logger.log(HAPPY_LOG, "****")
 	converter_logger.log(HAPPY_LOG, "Done converting Blogger posts to Markdown.")
 	converter_logger.log(HAPPY_LOG, "Take care, polar bear")
+	converter_logger.log(HAPPY_LOG, "****")
 	return 0
 
 
