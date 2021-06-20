@@ -20,6 +20,8 @@ Convert your Blogger posts to Markdown for use with Ghost, Jekyll, and more. Cre
 py convert_blogger_xml_to_md.py "path/to/blogger/backup.xml"
 ```
 
+3. Enjoy!
+
 ## Features
 
 - [x] No external dependencies
@@ -47,4 +49,3 @@ The `HTMLToMarkdownParser` class converts HTML to Markdown tag by tag. To extend
 
 3. Only tested converting my blog. This isn't battle-hardened code. Please create a Github issue if you run into any bugs.
 
-Enjoy!
