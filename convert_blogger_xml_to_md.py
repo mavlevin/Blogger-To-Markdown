@@ -62,7 +62,7 @@ class CustomFormatter(logging.Formatter):
 
 formatter = CustomFormatter()
 ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
+ch.setLevel(logging.INFO)
 ch.setFormatter(formatter)
 
 
@@ -141,7 +141,7 @@ class HTMLToMarkdownParser(HTMLParser):
 			else:
 				alt_text = ""
 			self.md += f"![{alt_text}]({published_img_path})"
-		elif tag == "div":
+		elif tag in ["div", "html", "body"]:
 			pass # do nothing
 		elif tag == "h1":
 			self.ensure_on_newline()
@@ -234,7 +234,7 @@ class HTMLToMarkdownParser(HTMLParser):
 				self.md += f"({last_link})"
 			else:
 				pass # do nothing
-		elif tag == "div":
+		elif tag in ["div", "html", "body"]:
 			pass # do nothing
 		elif tag == "img":
 			pass # do nothing
