@@ -85,6 +85,7 @@ class HTMLToMarkdownParser(HTMLParser):
 		self.escape_md_data = True # used to temporarily disable escaping (for code)
 		self.table_state = "waiting" # waiting / new / filling
 		self.table_columns = 0
+		self.last_image_fname = ""
 
 	def ensure_on_newline(self):
 		"""
@@ -135,6 +136,7 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag == "img":
 			if g_converter_config["images_on_own_line"]:
 				self.ensure_on_newline()
+			self.last_image_fname = urllib.parse.urlsplit(attr_dict["src"]).path.split("/")[-1]
 			published_img_path = download_img_src(attr_dict["src"])
 			if "alt" in attr_dict:
 				alt_text = attr_dict["alt"]
@@ -229,9 +231,39 @@ class HTMLToMarkdownParser(HTMLParser):
 			self.md += f"</{tag}>"
 		elif tag == "a":
 			last_link = self.links.pop()
-			if last_link != "unsupported_anchor":
-				self.md += "]"
-				self.md += f"({last_link})"
+			"""
+			algo: each time save name of last image. 
+			if pointing at blogspot AND href is urlencode(last_image), means we're point to that image -> don't want to include the link
+			"""
+			if "blogspot.com" in last_link and last_link.endswith('/' + self.last_image_fname):
+				# dont want to include this link
+				# must remove previous '[' already placed
+				try:
+					"""
+					current sitation:
+					self.md = 
+					...
+					[either_newline_or_nothing_here
+					![some alt text](/assets/img/posts\trimmed+with+subtitles.gif)]WE_ARE_HERE
+
+					need to remove first '[' in the example above
+					"""
+					if self.md[-1] != ")":
+						raise KeyError(f"expected ')' have '{self.md[-1]}'")
+					# find start of alt text
+					img_start_idx = self.md.rindex("![")
+					until_alt_text_opening = self.md[:img_start_idx]
+					if until_alt_text_opening.endswith("[\n"):
+						self.md = self.md[:img_start_idx-2] + self.md[img_start_idx:]
+					elif until_alt_text_opening.endswith("["):
+						self.md = self.md[:img_start_idx-1] + self.md[img_start_idx:]
+					else:
+						KeyError("Seems there is extra text in the anchor of the image. really weird.")
+				except Exception as e:
+					html_logger.warning(f"tried removing all traces of blogger image link, but got exception: {e}")
+					raise
+			elif last_link != "unsupported_anchor":
+				self.md += f"]({last_link})"
 			else:
 				pass # do nothing
 		elif tag in ["div", "html", "body"]:
@@ -348,7 +380,7 @@ def convert_html_to_md(html):
 	return parser.md
 
 
-def convert_post_to_md(post_xml):
+def convert_post_to_md(post_xml, output_md_formatter=None):
 	post_data = {}
 	post_data["blogger_id"] = post_xml.find("{http://www.w3.org/2005/Atom}id").text
 	post_data["author"] = post_xml.find("{http://www.w3.org/2005/Atom}author").find("{http://www.w3.org/2005/Atom}name").text
@@ -366,12 +398,13 @@ def convert_post_to_md(post_xml):
 	converter_logger.info(f"converting '{post_data['title']}'")
 	post_data["md"] = convert_html_to_md(post_xml.find("{http://www.w3.org/2005/Atom}content").text)
 
-	md_file_name = f"{post_data['published'].strftime('%Y-%m-%d')}-{urllib.parse.quote('-'.join(post_data['title'].split(' ')), safe='')}.md"
-
-	save_path = os.path.join(g_converter_config["md_file_save_path"], md_file_name)
-
-	converter_logger.log(HAPPY_LOG,f"saving '...{md_file_name}'")
-	open(save_path, "w", encoding="utf-8").write(post_data["md"])
+	if output_md_formatter:
+		output_md_formatter(post_data)
+	else:
+		md_file_name = urllib.parse.quote('-'.join(post_data['title'].split(' ')), safe='') + ".md"
+		save_path = os.path.join(g_converter_config["md_file_save_path"], md_file_name)
+		converter_logger.log(HAPPY_LOG,f"saving '...{md_file_name}'")
+		open(save_path, "w", encoding="utf-8").write(post_data["md"])
 	
 
 def extract_entry_kind(e):
@@ -386,10 +419,10 @@ def extract_entry_kind(e):
 def ensure_have_folder(f):
 	if not os.path.isdir(f):
 		converter_logger.info(f"creating folder '{f}'")
-		os.mkdir(f)
+		os.makedirs(f)
 
 
-def convert_posts_to_md(xml_path):
+def convert_posts_to_md(xml_path, output_md_formatter=None):
 	ensure_have_folder(g_converter_config["md_file_save_path"])
 	ensure_have_folder(g_converter_config["image_save_path"])
 
@@ -406,7 +439,7 @@ def convert_posts_to_md(xml_path):
 	for entry in root.findall("{http://www.w3.org/2005/Atom}entry"):
 		if "post" == extract_entry_kind(entry):
 			try:
-				convert_post_to_md(entry)
+				convert_post_to_md(entry, output_md_formatter)
 			except NotImplementedError as e:
 				converter_logger.error(f"skipping '{entry.find('{http://www.w3.org/2005/Atom}title').text or entry.find('{http://www.w3.org/2005/Atom}id').text}' because exception '{str(e)}'")
 			
