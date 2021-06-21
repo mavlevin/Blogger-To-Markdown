@@ -62,7 +62,7 @@ class CustomFormatter(logging.Formatter):
 
 formatter = CustomFormatter()
 ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
+ch.setLevel(logging.INFO)
 ch.setFormatter(formatter)
 
 
@@ -190,6 +190,7 @@ class HTMLToMarkdownParser(HTMLParser):
 			if "style" in attr_dict.keys() and attr_dict["style"] == "font-family: courier;":
 				self.md += "`"
 				self.spans.append("backtick_span")
+				self.escape_md_data = False
 			else:
 				self.spans.append("ignored_span")
 		elif tag == "code":
@@ -292,6 +293,7 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag == "span":
 			last_span = self.spans.pop()
 			if last_span == "backtick_span":
+				self.escape_md_data = True
 				self.md += "`"
 			else:
 				pass # ignoring this span
