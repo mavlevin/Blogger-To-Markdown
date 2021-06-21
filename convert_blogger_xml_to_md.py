@@ -62,7 +62,7 @@ class CustomFormatter(logging.Formatter):
 
 formatter = CustomFormatter()
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(logging.DEBUG)
 ch.setFormatter(formatter)
 
 
@@ -198,14 +198,20 @@ class HTMLToMarkdownParser(HTMLParser):
 				self.ensure_on_newline()
 
 		elif tag == "table":
-			if self.table_state != "waiting":
+			if "class" in attr_dict and "tr-caption-container" in attr_dict["class"]:
+				# this is a table to align the image caption. ignore it
+				self.table_state = "ignoring"
+				html_logger.debug("found caption table. ignoring")
+			elif self.table_state != "waiting":
 				raise NotImplementedError("Currently don't support nested tables :(")
-			self.table_state = "new"
+			else:
+				self.table_state = "new"
 		elif tag == "tbody":
 			pass # don't care
 		elif tag == "tr":
-			self.ensure_on_newline()
-			self.md += "| "
+			if self.table_state != "ignoring":
+				self.ensure_on_newline()
+				self.md += "| "
 		elif tag == "td" or tag == "th":
 			pass
 		else:
@@ -243,22 +249,18 @@ class HTMLToMarkdownParser(HTMLParser):
 					current sitation:
 					self.md = 
 					...
-					[either_newline_or_nothing_here
-					![some alt text](/assets/img/posts\trimmed+with+subtitles.gif)]WE_ARE_HERE
+					[\n\n
+					![some alt text](/assets/img/posts\trimmed+with+subtitles.gif)WE_ARE_HERE
 
 					need to remove first '[' in the example above
 					"""
 					if self.md[-1] != ")":
 						raise KeyError(f"expected ')' have '{self.md[-1]}'")
 					# find start of alt text
-					img_start_idx = self.md.rindex("![")
-					until_alt_text_opening = self.md[:img_start_idx]
-					if until_alt_text_opening.endswith("[\n"):
-						self.md = self.md[:img_start_idx-2] + self.md[img_start_idx:]
-					elif until_alt_text_opening.endswith("["):
-						self.md = self.md[:img_start_idx-1] + self.md[img_start_idx:]
-					else:
-						KeyError("Seems there is extra text in the anchor of the image. really weird.")
+					idx_alt_text_start = self.md.rfind('![')
+					open_bracket_to_delete_idx = self.md[:idx_alt_text_start].rfind("[")
+					self.md = self.md[:open_bracket_to_delete_idx] + self.md[open_bracket_to_delete_idx+1:]
+
 				except Exception as e:
 					html_logger.warning(f"tried removing all traces of blogger image link, but got exception: {e}")
 					raise
@@ -297,22 +299,25 @@ class HTMLToMarkdownParser(HTMLParser):
 			pass				
 
 		elif tag == "table":
-			if self.table_state != "filling":
-				raise Exception("bug in table parsing")
+			if self.table_state != "filling" and self.table_state != "ignoring":
+				html_logger.warn(f"reached </table> when table_state in {self.table_state}")
+				raise Exception("bug in table parsing.")
 			self.table_state = "waiting"
 			self.table_columns = 0
 		elif tag == "tbody":
 			pass # don't care
 		elif tag == "td" or tag == "th":
-			if self.table_state == "new":
-				self.table_columns += 1
-			self.md += " |"
+			if self.table_state != "ignoring":
+				if self.table_state == "new":
+					self.table_columns += 1
+				self.md += " |"
 		elif tag == "tr":
-			if self.table_state == "new":
-				self.md += "\n" + "---".join(["|"]*(self.table_columns+1))
-				self.table_state = "filling"
-			else:
-				self.ensure_on_newline()
+			if self.table_state != "ignoring":
+				if self.table_state == "new":
+					self.md += "\n" + "---".join(["|"]*(self.table_columns+1))
+					self.table_state = "filling"
+				else:
+					self.ensure_on_newline()
 		else:
 			html_logger.warning(f"doing nothing after {tag}")
 
@@ -355,9 +360,9 @@ def download_img_src(src_url):
 	if "dont download use demo image" in g_converter_config:
 		return g_converter_config["dont download use demo image"]
 	img_name = urllib.parse.unquote(src_url[src_url.rfind("/")+1:])
-	converter_logger.debug('img_name:', img_name)
+	converter_logger.debug('img_name:' + img_name)
 	save_name = os.path.join(g_converter_config["image_save_path"], img_name)
-	converter_logger.debug("saving @", save_name)
+	converter_logger.debug("saving @" + save_name)
 
 	if g_converter_config["ignore downloaded image cache"] or not os.path.isfile(save_name):
 		converter_logger.info(f"downloading '{src_url}'")
