@@ -83,8 +83,13 @@ class HTMLToMarkdownParser(HTMLParser):
 		self.list = [] # saves either last list number or unordered
 		self.spans = [] # tracks spans
 		self.escape_md_data = True # used to temporarily disable escaping (for code)
-		self.table_state = "waiting" # waiting / new / filling
-		self.table_columns = 0
+
+		self.nested_table_states = [] # each state is one of 'filled-th_%d' 'filling_body' 'ignoring'
+
+		# single-table support:
+		# self.table_state = "waiting" # waiting / new / filling
+		# self.table_columns = 0
+
 		self.last_image_fname = ""
 
 	def ensure_on_newline(self):
@@ -111,7 +116,7 @@ class HTMLToMarkdownParser(HTMLParser):
 		attr_dict = dict(attrs)
 		if tag == "p":
 			# only drop line if not in table
-			if self.table_state == "waiting":
+			if not self.nested_table_states or self.nested_table_states[-1] == "ignoring":
 				self.md += "\n"
 		elif tag == "i":
 			self.md += "*"
@@ -200,16 +205,14 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag == "table":
 			if "class" in attr_dict and "tr-caption-container" in attr_dict["class"]:
 				# this is a table to align the image caption. ignore it
-				self.table_state = "ignoring"
+				self.nested_table_states.append("ignoring")
 				html_logger.debug("found caption table. ignoring")
-			elif self.table_state != "waiting":
-				raise NotImplementedError("Currently don't support nested tables :(")
 			else:
-				self.table_state = "new"
+				self.nested_table_states.append("filled-th_0")
 		elif tag == "tbody":
 			pass # don't care
 		elif tag == "tr":
-			if self.table_state != "ignoring":
+			if self.nested_table_states and self.nested_table_states[-1] != "ignoring":
 				self.ensure_on_newline()
 				self.md += "| "
 		elif tag == "td" or tag == "th":
@@ -222,7 +225,8 @@ class HTMLToMarkdownParser(HTMLParser):
 
 		if tag == "p":
 			# only drop line if not in table
-			if self.table_state == "waiting":
+			if not self.nested_table_states or self.nested_table_states[-1] == "ignoring":
+				self.md += "\n"
 				# might have had something like </code> that already dropped us a line
 				self.ensure_on_newline() 
 		elif tag == "i":
@@ -299,23 +303,24 @@ class HTMLToMarkdownParser(HTMLParser):
 			pass				
 
 		elif tag == "table":
-			if self.table_state != "filling" and self.table_state != "ignoring":
-				html_logger.warn(f"reached </table> when table_state in {self.table_state}")
+			if self.nested_table_states == [] or (self.nested_table_states[-1] != "filling_body" and self.nested_table_states[-1] != "ignoring"):
+				html_logger.warn(f"reached </table> in impossible state: {self.nested_table_states}")
 				raise Exception("bug in table parsing.")
-			self.table_state = "waiting"
-			self.table_columns = 0
+			self.nested_table_states.pop()
 		elif tag == "tbody":
 			pass # don't care
 		elif tag == "td" or tag == "th":
-			if self.table_state != "ignoring":
-				if self.table_state == "new":
-					self.table_columns += 1
+			if self.nested_table_states and self.nested_table_states[-1] != "ignoring":
+				if self.nested_table_states[-1].startswith("filled-th_"):
+					filled_already = int(self.nested_table_states[-1].split("_")[1])
+					self.nested_table_states[-1] = "filled-th_" + str(filled_already+1)
 				self.md += " |"
 		elif tag == "tr":
-			if self.table_state != "ignoring":
-				if self.table_state == "new":
-					self.md += "\n" + "---".join(["|"]*(self.table_columns+1))
-					self.table_state = "filling"
+			if self.nested_table_states and self.nested_table_states[-1] != "ignoring":
+				if self.nested_table_states[-1].startswith("filled-th_"):
+					filled_already = int(self.nested_table_states[-1].split("_")[1])
+					self.md += "\n" + "---".join(["|"]*(filled_already+1))
+					self.nested_table_states[-1] = "filling_body"
 				else:
 					self.ensure_on_newline()
 		else:
