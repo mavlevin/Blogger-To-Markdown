@@ -62,7 +62,7 @@ class CustomFormatter(logging.Formatter):
 
 formatter = CustomFormatter()
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(logging.DEBUG)
 ch.setFormatter(formatter)
 
 
@@ -86,10 +86,7 @@ class HTMLToMarkdownParser(HTMLParser):
 
 		self.nested_table_states = [] # each state is one of 'filled-th_%d' 'filling_body' 'ignoring'
 
-		# single-table support:
-		# self.table_state = "waiting" # waiting / new / filling
-		# self.table_columns = 0
-
+		self.newline_after_td = False
 		self.last_image_fname = ""
 
 	def ensure_on_newline(self):
@@ -117,7 +114,7 @@ class HTMLToMarkdownParser(HTMLParser):
 		if tag == "p":
 			# only drop line if not in table
 			if not self.nested_table_states or self.nested_table_states[-1] == "ignoring":
-				self.md += "\n"
+				self.ensure_on_newline() 
 		elif tag == "i":
 			self.md += "*"
 		elif tag == "blockquote":
@@ -217,7 +214,16 @@ class HTMLToMarkdownParser(HTMLParser):
 				self.ensure_on_newline()
 				self.md += "| "
 		elif tag == "td" or tag == "th":
-			pass
+			if self.nested_table_states and self.nested_table_states[-1] == "ignoring":
+				# ignoring because we're in table of caption.
+
+				# check if this td has caption data 
+				"""
+				html table of caption format:
+					<td class="tr-caption" style="text-align: center;">I am a table caption <br /> </td>
+				"""
+				if "class" in attr_dict and "tr-caption" in attr_dict["class"]:
+					self.newline_after_td = True
 		else:
 			html_logger.warning(f"doing nothing for {tag}")
 
@@ -227,7 +233,6 @@ class HTMLToMarkdownParser(HTMLParser):
 		if tag == "p":
 			# only drop line if not in table
 			if not self.nested_table_states or self.nested_table_states[-1] == "ignoring":
-				self.md += "\n"
 				# might have had something like </code> that already dropped us a line
 				self.ensure_on_newline() 
 		elif tag == "i":
@@ -312,7 +317,13 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag == "tbody":
 			pass # don't care
 		elif tag == "td" or tag == "th":
-			if self.nested_table_states and self.nested_table_states[-1] != "ignoring":
+
+			if self.nested_table_states and self.nested_table_states[-1] == "ignoring":
+				if self.newline_after_td:
+					print("adding the cool newline for comment. happy? lol")
+					self.md += "\n"
+					self.newline_after_td = False
+			else:
 				if self.nested_table_states[-1].startswith("filled-th_"):
 					filled_already = int(self.nested_table_states[-1].split("_")[1])
 					self.nested_table_states[-1] = "filled-th_" + str(filled_already+1)
