@@ -22,11 +22,15 @@ g_converter_config["image_save_path"] = "fetched_images"
 # path prefix to use in markdown to access downloaded images
 g_converter_config["img_path_relative_to_md"] = "../fetched_images"
 
+# parse the href around an image and download the highest quality image
+g_converter_config["try using better quality image from link"] = True 
+
 # html to markdown conversion settings
 g_converter_config["images_on_own_line"] = True
 g_converter_config["allow consecutive empty lines"] = False
 g_converter_config["ignore empty head tags"] = True
 g_converter_config["ignore downloaded image cache"] = False
+
 
 # settings to ease debugging
 # g_converter_config["dont download use demo image"] = "../demo.jpg"
@@ -62,7 +66,7 @@ class CustomFormatter(logging.Formatter):
 
 formatter = CustomFormatter()
 ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
+ch.setLevel(logging.INFO)
 ch.setFormatter(formatter)
 
 
@@ -138,8 +142,16 @@ class HTMLToMarkdownParser(HTMLParser):
 		elif tag == "img":
 			if g_converter_config["images_on_own_line"]:
 				self.ensure_on_newline()
-			self.last_image_fname = urllib.parse.urlsplit(attr_dict["src"]).path.split("/")[-1]
-			published_img_path = download_img_src(attr_dict["src"])
+			self.last_image_fname = urllib.parse.urlsplit(attr_dict["src"]).path.split("/")[-1]		
+			img_src = attr_dict["src"]
+			if g_converter_config["try using better quality image from link"]:
+				# check if have link to higher quality pic
+				if self.links and "blogspot.com" in self.links[-1] \
+					and self.links[-1].endswith('/' + self.last_image_fname):
+					# nice. found higher quality version of pic
+					html_logger.debug(f"using higher quality {self.links[-1]} instead of {attr_dict['src']}")
+					img_src = self.links[-1]
+			published_img_path = download_img_src(img_src)
 			if "alt" in attr_dict:
 				alt_text = attr_dict["alt"]
 			else:
@@ -266,11 +278,10 @@ class HTMLToMarkdownParser(HTMLParser):
 					"""
 					if self.md[-1] != ")":
 						raise KeyError(f"expected ')' have '{self.md[-1]}'")
-					# find start of alt text
+					# remove opening bracked of link
 					idx_alt_text_start = self.md.rfind('![')
 					open_bracket_to_delete_idx = self.md[:idx_alt_text_start].rfind("[")
 					self.md = self.md[:open_bracket_to_delete_idx] + self.md[open_bracket_to_delete_idx+1:]
-
 				except Exception as e:
 					html_logger.warning(f"tried removing all traces of blogger image link, but got exception: {e}")
 					raise
@@ -320,7 +331,6 @@ class HTMLToMarkdownParser(HTMLParser):
 
 			if self.nested_table_states and self.nested_table_states[-1] == "ignoring":
 				if self.newline_after_td:
-					print("adding the cool newline for comment. happy? lol")
 					self.md += "\n"
 					self.newline_after_td = False
 			else:
